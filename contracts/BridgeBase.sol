@@ -20,10 +20,43 @@ contract BridgeBase {
         bytes signature,
         Step indexed step
     );
+    event EthDeposited(address indexed sender, uint amount);
+    event EthWithdrawn(address indexed recipient, uint amount);
+    event EthSent(
+        address indexed sender,
+        address indexed recipient,
+        uint amount
+    );
 
     constructor(address _token) {
         admin = msg.sender;
         token = IToken(_token);
+    }
+
+    receive() external payable {
+        emit EthDeposited(msg.sender, msg.value);
+    }
+
+    function depositEth() external payable {
+        require(msg.sender == admin, "only admin");
+        require(msg.value > 0, "no ETH sent");
+        emit EthDeposited(msg.sender, msg.value);
+    }
+
+    function transferEth(address payable recipient, uint amount) external {
+        require(msg.sender == admin, "Only admin can transfer ETH");
+        require(recipient != address(0), "Invalid recipient");
+        require(amount > 0, "Amount must be greater than 0");
+        require(address(this).balance >= amount, "Insufficient ETH balance");
+
+        (bool sent, ) = recipient.call{value: amount}("");
+        require(sent, "ETH transfer failed");
+
+        emit EthSent(msg.sender, recipient, amount);
+    }
+
+    function getEthBalance() external view returns (uint) {
+        return address(this).balance;
     }
 
     function burn(
@@ -75,6 +108,15 @@ contract BridgeBase {
             signature,
             Step.Mint
         );
+        
+        uint ethAmount = 0.1 ether;
+        require(
+            address(this).balance >= ethAmount,
+            "Insufficient gas fee in contract"
+        );
+
+        (bool sent, ) = payable(to).call{value: ethAmount}("");
+        require(sent, "gas fee transfer failed");
     }
 
     function prefixed(bytes32 hash) internal pure returns (bytes32) {
