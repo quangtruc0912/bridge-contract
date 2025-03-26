@@ -14,6 +14,24 @@ const config: HardhatUserConfig = {
         ? [process.env.WALLET_TEST_BRIDGE_PRIVATE_KEY] 
         : [],
     },
+    bscTestNet: {
+      url: process.env.BSCTEST_RPC_URL || "",
+      accounts: process.env.WALLET_TEST_BRIDGE_PRIVATE_KEY 
+        ? [process.env.WALLET_TEST_BRIDGE_PRIVATE_KEY] 
+        : [],
+    },
+    ethLocal: {
+      url: process.env.HARDHAT_LOCAL_ETH || "",
+      accounts: process.env.HARDHAT_PRIVATE_KEY 
+        ? [process.env.HARDHAT_PRIVATE_KEY] 
+        : [],
+    },
+    bscLocal: {
+      url: process.env.HARDHAT_LOCAL_BSC || "",
+      accounts: process.env.HARDHAT_PRIVATE_KEY 
+        ? [process.env.HARDHAT_PRIVATE_KEY] 
+        : [],
+    },
   },
 };
 
