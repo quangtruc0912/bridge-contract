@@ -107,11 +107,7 @@ Observe: copy `bridgeBSCAddress`  and replace `bridgeBSCAddress` at 2 file  `bri
 
 6. Come back to the terminal at step 4 to Observe
 
-```bash 
-   npx hardhat run scripts/burnlocal.ts --network ethLocal
-``` 
-
-6. Check balance of the burner on bsc 
+7. Check balance of the burner on bsc 
 
 ```bash 
    npx hardhat run scripts/checkTokenPrice.ts --network bscLocal
