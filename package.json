@@ -1,11 +1,17 @@
 {
   "name": "hardhat-project",
   "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
-    "hardhat": "^2.22.19"
+    "@types/node": "^20.11.30",
+    "ethers": "^6.13.5",
+    "hardhat": "^2.22.19",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.3"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.2.0",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "hardhat-gas-reporter": "^2.2.2"
   }
 }

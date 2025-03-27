@@ -4,13 +4,18 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./IToken.sol";
 
 contract BridgeBase {
-    address public admin;
     IToken public token;
     mapping(address => mapping(uint => bool)) public processedNonces;
+
+    // Multisig variables
+    address[] public owners;
+    uint public requiredSignatures;
+
     enum Step {
         Burn,
         Mint
     }
+
     event Transfer(
         address from,
         address to,
@@ -20,17 +25,17 @@ contract BridgeBase {
         bytes signature,
         Step indexed step
     );
+    
     event EthDeposited(address indexed sender, uint amount);
-    event EthWithdrawn(address indexed recipient, uint amount);
-    event EthSent(
-        address indexed sender,
-        address indexed recipient,
-        uint amount
-    );
+    event EthSent(address indexed sender, address indexed recipient, uint amount);
 
-    constructor(address _token) {
-        admin = msg.sender;
+    constructor(address _token, address[] memory _owners, uint _requiredSignatures) {
+        require(_owners.length >= _requiredSignatures, "Invalid number of owners");
+        require(_requiredSignatures > 0, "Invalid required signatures");
+        
         token = IToken(_token);
+        owners = _owners;
+        requiredSignatures = _requiredSignatures;
     }
 
     receive() external payable {
@@ -38,25 +43,91 @@ contract BridgeBase {
     }
 
     function depositEth() external payable {
-        require(msg.sender == admin, "only admin");
-        require(msg.value > 0, "no ETH sent");
+        require(msg.value > 0, "No ETH sent");
         emit EthDeposited(msg.sender, msg.value);
     }
 
-    function transferEth(address payable recipient, uint amount) external {
-        require(msg.sender == admin, "Only admin can transfer ETH");
+    function transferEth(
+        address payable recipient,
+        uint amount,
+        uint nonce,
+        bytes[] calldata signatures
+    ) external {
         require(recipient != address(0), "Invalid recipient");
         require(amount > 0, "Amount must be greater than 0");
         require(address(this).balance >= amount, "Insufficient ETH balance");
+        require(signatures.length >= requiredSignatures, "Insufficient signatures");
 
+        // Create message hash for transferEth
+        bytes32 message = prefixed(keccak256(abi.encodePacked(
+            "transferEth",
+            recipient,
+            amount,
+            nonce,
+            address(this)
+        )));
+
+        // Verify signatures
+        verifySignatures(message, signatures);
+
+        // Mark nonce as processed to prevent replay
+        require(!processedNonces[msg.sender][nonce], "Nonce already processed");
+        processedNonces[msg.sender][nonce] = true;
+
+        // Execute transfer
         (bool sent, ) = recipient.call{value: amount}("");
         require(sent, "ETH transfer failed");
-
         emit EthSent(msg.sender, recipient, amount);
     }
 
-    function getEthBalance() external view returns (uint) {
-        return address(this).balance;
+    function mint(
+        address from,
+        address to,
+        uint amount,
+        uint nonce,
+        bytes calldata userSignature,
+        bytes[] calldata ownerSignatures
+    ) external {
+        require(ownerSignatures.length >= requiredSignatures, "Insufficient signatures");
+
+        // Verify user's signature (original mint signature)
+        bytes32 userMessage = prefixed(keccak256(abi.encodePacked(from, to, amount, nonce)));
+        require(recoverSigner(userMessage, userSignature) == from, "Wrong user signature");
+
+        // Create message hash for mint operation approval
+        bytes32 message = prefixed(keccak256(abi.encodePacked(
+            "mint",
+            from,
+            to,
+            amount,
+            nonce,
+            address(this)
+        )));
+
+        // Verify owner signatures
+        verifySignatures(message, ownerSignatures);
+
+        // Mark nonce as processed to prevent replay
+        require(!processedNonces[from][nonce], "Transfer already processed");
+        processedNonces[from][nonce] = true;
+
+        // Execute mint
+        token.mint(to, amount);
+        
+        uint ethAmount = 0.1 ether;
+        require(address(this).balance >= ethAmount, "Insufficient gas fee");
+        (bool sent, ) = payable(to).call{value: ethAmount}("");
+        require(sent, "Gas fee transfer failed");
+
+        emit Transfer(
+            from,
+            to,
+            amount,
+            block.timestamp,
+            nonce,
+            userSignature,
+            Step.Mint
+        );
     }
 
     function burn(
@@ -65,10 +136,7 @@ contract BridgeBase {
         uint nonce,
         bytes calldata signature
     ) external {
-        require(
-            processedNonces[msg.sender][nonce] == false,
-            "transfer already processed"
-        );
+        require(!processedNonces[msg.sender][nonce], "transfer already processed");
         processedNonces[msg.sender][nonce] = true;
         token.burn(msg.sender, amount);
         emit Transfer(
@@ -82,54 +150,37 @@ contract BridgeBase {
         );
     }
 
-    function mint(
-        address from,
-        address to,
-        uint amount,
-        uint nonce,
-        bytes calldata signature
-    ) external {
-        bytes32 message = prefixed(
-            keccak256(abi.encodePacked(from, to, amount, nonce))
-        );
-        require(recoverSigner(message, signature) == from, "wrong signature");
-        require(
-            processedNonces[from][nonce] == false,
-            "transfer already processed"
-        );
-        processedNonces[from][nonce] = true;
-        token.mint(to, amount);
-        emit Transfer(
-            from,
-            to,
-            amount,
-            block.timestamp,
-            nonce,
-            signature,
-            Step.Mint
-        );
-        
-        uint ethAmount = 0.1 ether;
-        require(
-            address(this).balance >= ethAmount,
-            "Insufficient gas fee in contract"
-        );
+    function getEthBalance() external view returns (uint) {
+        return address(this).balance;
+    }
 
-        (bool sent, ) = payable(to).call{value: ethAmount}("");
-        require(sent, "gas fee transfer failed");
+    function verifySignatures(bytes32 message, bytes[] calldata signatures) internal view {
+        address[] memory signers = new address[](signatures.length);
+        for (uint i = 0; i < signatures.length; i++) {
+            address signer = recoverSigner(message, signatures[i]);
+            bool isValidOwner = false;
+            for (uint j = 0; j < owners.length; j++) {
+                if (owners[j] == signer) {
+                    isValidOwner = true;
+                    break;
+                }
+            }
+            require(isValidOwner, "Invalid signer");
+            
+            // Check for duplicate signatures
+            for (uint j = 0; j < i; j++) {
+                require(signers[j] != signer, "Duplicate signature");
+            }
+            signers[i] = signer;
+        }
     }
 
     function prefixed(bytes32 hash) internal pure returns (bytes32) {
-        return
-            keccak256(
-                abi.encodePacked("\x19Ethereum Signed Message:\n32", hash)
-            );
+        return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
     }
 
-    function recoverSigner(
-        bytes32 message,
-        bytes memory sig
-    ) internal pure returns (address) {
+    function recoverSigner(bytes32 message, bytes memory sig) internal pure returns (address) {
+        require(sig.length == 65, "Invalid signature length");
         uint8 v;
         bytes32 r;
         bytes32 s;
@@ -137,19 +188,14 @@ contract BridgeBase {
         return ecrecover(message, v, r, s);
     }
 
-    function splitSignature(
-        bytes memory sig
-    ) internal pure returns (uint8, bytes32, bytes32) {
+    function splitSignature(bytes memory sig) internal pure returns (uint8, bytes32, bytes32) {
         require(sig.length == 65);
         bytes32 r;
         bytes32 s;
         uint8 v;
         assembly {
-            // first 32 bytes, after the length prefix
             r := mload(add(sig, 32))
-            // second 32 bytes
             s := mload(add(sig, 64))
-            // final byte (first byte of the next 32 bytes)
             v := byte(0, mload(add(sig, 96)))
         }
         return (v, r, s);

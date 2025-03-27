@@ -5,19 +5,21 @@ async function main() {
     const providerEth = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
     const providerBsc = new ethers.JsonRpcProvider("http://127.0.0.1:8546");
 
-    const signers = await ethers.getSigners();
-    const admin = signers[0];
+    const [deployer, owner2, owner3] = await ethers.getSigners();
 
-    const bridgeEthAddress = "0x9A9f2CCfdE556A7E9Ff0848998Aa4a0CFD8863AE";
-    const bridgeBscAddress = "0x610178dA211FEF7D417bC0e6FeD39F05609AD788";
+    console.log(owner2.address)
+    console.log(owner3.address)
+
+    const bridgeEthAddress = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0";
+    const bridgeBscAddress = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
 
     const BridgeEthFactory = await ethers.getContractFactory("BridgeETH");
     const BridgeBscFactory = await ethers.getContractFactory("BridgeBSC");
 
-    // ✅ Explicitly use providerEth for Ethereum
-    const bridgeEth = BridgeEthFactory.attach(bridgeEthAddress).connect(await providerEth.getSigner(admin.address)) as BridgeETH;
-    // ✅ Explicitly use providerBsc for Binance Smart Chain
-    const bridgeBsc = BridgeBscFactory.attach(bridgeBscAddress).connect(await providerBsc.getSigner(admin.address)) as BridgeBSC;
+    // Explicitly use providerEth for Ethereum
+    const bridgeEth = BridgeEthFactory.attach(bridgeEthAddress).connect(await providerEth.getSigner(deployer.address)) as BridgeETH;
+    //Explicitly use providerBsc for Binance Smart Chain
+    const bridgeBsc = BridgeBscFactory.attach(bridgeBscAddress).connect(await providerBsc.getSigner(deployer.address)) as BridgeBSC;
 
     console.log("✅ Listening for Transfer events on Ethereum...");
 
@@ -51,12 +53,31 @@ async function main() {
             console.error("❌ Error: Missing amount or nonce", { amount, nonce });
             return;
         }
-    
+        const amountParsed = BigInt(amount);
+        const nonceParsed = BigInt(nonce);
+        
+        const ownerPackedMessage = ethers.keccak256(
+            ethers.solidityPacked(
+                ["string", "address", "address", "uint256", "uint256", "address"],
+                ["mint", from, to, amountParsed, nonceParsed, bridgeBscAddress] // Use bridgeBscAddress
+            )
+        );
+        
+        console.log("Deployer address:", deployer.address);
+        console.log("Owner2 address:", owner2.address);
+        console.log("Message hash:", ownerPackedMessage);
+        
+        const sig1 = await owner2.signMessage(ethers.getBytes(ownerPackedMessage));
+        const sig2 = await deployer.signMessage(ethers.getBytes(ownerPackedMessage));
+        const ownerSigs = [sig1, sig2];
+        
+        console.log("Sig1 (owner2):", sig1);
+        console.log("Sig2 (deployer):", sig2);
+        
+        console.log(`📌 Minting ${amountParsed} tokens to ${to} on BSC...`);
         try {
-            const amountParsed = BigInt(amount);
-            const nonceParsed = Number(nonce);
-            console.log(`📌 Minting ${amountParsed} tokens to ${to} on BSC...`);
-            const tx = await bridgeBsc.mint(from, to, amountParsed, nonceParsed, signature);
+          
+            const tx = await bridgeBsc.mint(from, to, amountParsed, nonceParsed, signature,ownerSigs);
             await tx.wait();
             console.log(`✅ Minted tokens on BSC! Tx Hash: ${tx.hash}`);
         } catch (error) {

@@ -1,58 +1,75 @@
-const hre = require("hardhat");
+const { ethers } = require("hardhat");
 
 async function main() {
-
-    const [deployer] = await hre.ethers.getSigners();
+    //  Get deployer
+    const [deployer, owner2, owner3] = await ethers.getSigners(); // Add more signers for multisig
     console.log(`Deploying contracts with account: ${deployer.address}`);
 
-    // Deploy Token
-    const TokenEth = await hre.ethers.getContractFactory("TokenETH");
+    //  Deploy TokenETH
+    const TokenEth = await ethers.getContractFactory("TokenETH");
     const tokenEth = await TokenEth.deploy();
     await tokenEth.waitForDeployment();
     const tokenEthAddress = await tokenEth.getAddress();
     console.log("TokenEth deployed at:", tokenEthAddress);
 
     // Mint tokens
-    await tokenEth.mint(deployer.address, hre.ethers.parseUnits("1000", 18));
+    await tokenEth.mint(deployer.address, ethers.parseUnits("1000", 18));
     console.log(`Minted 1000 TokenEth to: ${deployer.address}`);
 
-    // Deploy Bridge
-    const BridgeEth = await hre.ethers.getContractFactory("BridgeETH");
-    const bridgeEth = await BridgeEth.deploy(tokenEthAddress);
+    //  Deploy BridgeETH with multisig owners
+    const owners = [deployer.address, owner2.address, owner3.address];
+    const requiredSignatures = 2; // 2-of-3 multisig
+    const BridgeEth = await ethers.getContractFactory("BridgeETH");
+    const bridgeEth = await BridgeEth.deploy(tokenEthAddress, owners, requiredSignatures);
     await bridgeEth.waitForDeployment();
     const bridgeEthAddress = await bridgeEth.getAddress();
     console.log("BridgeEth deployed at:", bridgeEthAddress);
 
-    // Get Contract Instances
-    const bridgeContract = await hre.ethers.getContractAt("BridgeETH", bridgeEthAddress);
+    // Get contract instance
+    const bridgeContract = await ethers.getContractAt("BridgeETH", bridgeEthAddress);
 
-    console.log("\n Depositing 2 ETH into the bridge...");
-    const depositTx = await bridgeContract.depositEth({ value: hre.ethers.parseEther("2") });
+    // Deposit 2 ETH into the bridge
+    console.log("\nDepositing 2 ETH into the bridge...");
+    const depositTx = await bridgeContract.depositEth({ value: ethers.parseEther("2") });
     await depositTx.wait();
-    console.log(" Deposited 2 ETH into the bridge");
+    console.log("Deposited 2 ETH into the bridge");
 
-    // 2️⃣ Check Bridge ETH Balance
-    let bridgeBalance = await hre.ethers.provider.getBalance(bridgeEthAddress);
-    console.log(`\n Bridge ETH Balance: ${hre.ethers.formatEther(bridgeBalance)} ETH`);
+    // Check bridge ETH balance
+    let bridgeBalance = await ethers.provider.getBalance(bridgeEthAddress);
+    console.log(`Bridge ETH Balance: ${ethers.formatEther(bridgeBalance)} ETH`);
 
-    // 3️⃣ Withdraw ETH from Bridge (by Admin)
-    console.log("\n Withdrawing 0.5 ETH from the bridge...");
-    const withdrawTx = await bridgeContract.withdrawEth(deployer.address, hre.ethers.parseEther("0.5"));
+    // Withdraw 0.5 ETH with off-chain signatures
+    console.log("\nWithdrawing 0.5 ETH from the bridge...");
+    const nonce = 1; // Unique nonce for this transfer
+    const amount = ethers.parseEther("0.5");
+    const packedMessage = ethers.solidityPackedKeccak256(
+        ["string", "address", "uint256", "uint256", "address"],
+        ["transferEth", deployer.address, amount, nonce, bridgeEthAddress]
+    );
+
+    // Sign the message with 2 owners
+    const sig1 = await deployer.signMessage(ethers.getBytes(packedMessage));
+    const sig2 = await owner2.signMessage(ethers.getBytes(packedMessage));
+    const signatures = [sig1, sig2];
+
+    // Call transferEth with signatures
+    const withdrawTx = await bridgeContract.transferEth(deployer.address, amount, nonce, signatures);
     await withdrawTx.wait();
-    console.log(`\n Withdrawn 0.5 ETH to admin: ${deployer.address}`);
+    console.log(`Withdrawn 0.5 ETH to: ${deployer.address}`);
 
-    // 4️⃣ Check Bridge ETH Balance Again
-    bridgeBalance = await hre.ethers.provider.getBalance(bridgeEthAddress);
-    console.log(`\n Bridge ETH Balance After Withdrawal: ${hre.ethers.formatEther(bridgeBalance)} ETH`);
+    // 6️⃣ Check balances again
+    bridgeBalance = await ethers.provider.getBalance(bridgeEthAddress);
+    console.log(`Bridge ETH Balance After Withdrawal: ${ethers.formatEther(bridgeBalance)} ETH`);
 
-    // Update token admin
+    const deployerBalance = await ethers.provider.getBalance(deployer.address);
+    console.log(`Deployer ETH Balance After Withdrawal: ${ethers.formatEther(deployerBalance)} ETH`);
+
+    // 7️⃣ Update token admin
     await tokenEth.updateAdmin(bridgeEthAddress);
     console.log(`TokenEth admin updated to: ${bridgeEthAddress}`);
-
-
 }
 
 main().catch((error) => {
-    console.error(error);
+    console.error("Error:", error);
     process.exit(1);
 });
